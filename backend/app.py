@@ -54,10 +54,19 @@ def init_pose_engine():
         return pose_engine
 
 
-def process_pose_frame(frame, timestamp_ms):
+def process_pose_frame(frame, timestamp_ms, draw_landmarks=True):
     engine = init_pose_engine()
     with pose_engine_lock:
-        return engine.process_frame(frame, timestamp_ms)
+        return engine.process_frame(
+            frame,
+            timestamp_ms,
+            draw_landmarks=draw_landmarks,
+        )
+
+
+def is_recording_active():
+    with recording_lock:
+        return recording_state["is_recording"]
 
 
 def create_video_writer(filepath, width, height):
@@ -133,30 +142,61 @@ async def camera_frames(websocket: WebSocket):
         await websocket.close(code=1013, reason="Another camera stream is active")
         return
 
+    preview_enabled = True
+
     try:
         while True:
-            frame_bytes = await websocket.receive_bytes()
+            message = await websocket.receive()
+
+            if message["type"] == "websocket.disconnect":
+                break
+
+            control_text = message.get("text")
+            if control_text is not None:
+                try:
+                    control = json.loads(control_text)
+                except json.JSONDecodeError:
+                    continue
+
+                if control.get("type") == "preview":
+                    preview_enabled = bool(control.get("enabled", True))
+                continue
+
+            frame_bytes = message.get("bytes")
+            if frame_bytes is None:
+                continue
+
             encoded_frame = np.frombuffer(frame_bytes, dtype=np.uint8)
             frame = cv2.imdecode(encoded_frame, cv2.IMREAD_COLOR)
             if frame is None:
+                await websocket.send_text(json.dumps({"type": "frame_ack"}))
                 continue
 
             timestamp_ms = int(time.time() * 1000)
+            recording_active = is_recording_active()
+            draw_landmarks = preview_enabled or recording_active
+
             processed_frame, metrics = await asyncio.to_thread(
                 process_pose_frame,
                 frame,
                 timestamp_ms,
+                draw_landmarks,
             )
             latest_metrics = metrics
             append_recording_frame(processed_frame, metrics, timestamp_ms)
 
-            encoded, buffer = cv2.imencode(
-                ".jpg",
-                processed_frame,
-                [cv2.IMWRITE_JPEG_QUALITY, 82],
-            )
-            if encoded:
-                await websocket.send_bytes(buffer.tobytes())
+            if preview_enabled:
+                encoded, buffer = cv2.imencode(
+                    ".jpg",
+                    processed_frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, 82],
+                )
+                if encoded:
+                    await websocket.send_bytes(buffer.tobytes())
+                else:
+                    await websocket.send_text(json.dumps({"type": "frame_ack"}))
+            else:
+                await websocket.send_text(json.dumps({"type": "frame_ack"}))
     except WebSocketDisconnect:
         pass
     finally:
