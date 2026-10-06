@@ -79,6 +79,14 @@ const VideoFeed = ({
         previewEnabledRef.current = nextEnabled;
         setIsPreviewEnabled(nextEnabled);
 
+        const socket = cameraSocketRef.current;
+        if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({
+                type: 'preview',
+                enabled: nextEnabled
+            }));
+        }
+
         if (!nextEnabled) {
             clearProcessedFrame();
         }
@@ -199,13 +207,24 @@ const VideoFeed = ({
         socket.onopen = () => {
             awaitingProcessedFrameRef.current = false;
             setAnalysisStatus('online');
+
+            socket.send(JSON.stringify({
+                type: 'preview',
+                enabled: previewEnabledRef.current
+            }));
+
             captureTimer = window.setInterval(sendCurrentFrame, FRAME_INTERVAL_MS);
         };
         socket.onmessage = (event) => {
             awaitingProcessedFrameRef.current = false;
 
-            // Preview OFF keeps camera capture and analysis running, but skips
-            // browser-side processed-frame URL creation and image rendering.
+            // In analysis-only mode the backend sends a tiny text ACK instead
+            // of a processed JPEG. This keeps frame pacing intact without
+            // paying the preview rendering / JPEG-return cost.
+            if (typeof event.data === 'string') {
+                return;
+            }
+
             if (!previewEnabledRef.current) return;
 
             const frameBlob = event.data instanceof Blob
@@ -378,8 +397,9 @@ const VideoFeed = ({
                         <div className="absolute inset-0 flex items-center justify-center bg-slate-950">
                             <div className="text-center">
                                 <EyeOff className="mx-auto mb-3 h-8 w-8 text-slate-500" />
-                                <p className="text-sm font-semibold tracking-wide text-slate-300">PREVIEW OFF</p>
-                                <p className="mt-1 text-xs text-slate-500">Camera capture and pose analysis continue.</p>
+                                <p className="text-sm font-semibold tracking-wide text-slate-300">ANALYSIS-ONLY MODE</p>
+                                <p className="mt-1 text-xs text-slate-500">Camera capture, pose analysis, and metrics continue.</p>
+                                <p className="mt-1 text-[11px] text-slate-600">Skeleton drawing and processed-video return are disabled.</p>
                             </div>
                         </div>
                     )}
