@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Camera,
     Circle,
+    Eye,
+    EyeOff,
     RefreshCw,
     ShieldAlert,
     Square,
@@ -51,6 +53,7 @@ const VideoFeed = ({
     const capturePendingRef = useRef(false);
     const awaitingProcessedFrameRef = useRef(false);
     const processedUrlRef = useRef(null);
+    const previewEnabledRef = useRef(true);
 
     const [cameraStatus, setCameraStatus] = useState('idle');
     const [cameraError, setCameraError] = useState('');
@@ -58,6 +61,7 @@ const VideoFeed = ({
     const [selectedDeviceId, setSelectedDeviceId] = useState('');
     const [analysisStatus, setAnalysisStatus] = useState('offline');
     const [hasProcessedFrame, setHasProcessedFrame] = useState(false);
+    const [isPreviewEnabled, setIsPreviewEnabled] = useState(true);
 
     const clearProcessedFrame = useCallback(() => {
         if (processedUrlRef.current) {
@@ -69,6 +73,16 @@ const VideoFeed = ({
         }
         setHasProcessedFrame(false);
     }, []);
+
+    const handlePreviewToggle = useCallback(() => {
+        const nextEnabled = !previewEnabledRef.current;
+        previewEnabledRef.current = nextEnabled;
+        setIsPreviewEnabled(nextEnabled);
+
+        if (!nextEnabled) {
+            clearProcessedFrame();
+        }
+    }, [clearProcessedFrame]);
 
     const releaseCamera = useCallback(() => {
         stopStream(streamRef.current);
@@ -189,6 +203,11 @@ const VideoFeed = ({
         };
         socket.onmessage = (event) => {
             awaitingProcessedFrameRef.current = false;
+
+            // Preview OFF keeps camera capture and analysis running, but skips
+            // browser-side processed-frame URL creation and image rendering.
+            if (!previewEnabledRef.current) return;
+
             const frameBlob = event.data instanceof Blob
                 ? event.data
                 : new Blob([event.data], { type: 'image/jpeg' });
@@ -308,6 +327,19 @@ const VideoFeed = ({
                     </label>
                     <button
                         type="button"
+                        onClick={handlePreviewToggle}
+                        aria-pressed={isPreviewEnabled}
+                        className="flex items-center gap-1.5 rounded-full border border-white/10 bg-slate-950/70 px-3 py-1.5 text-[10px] font-semibold text-slate-200 shadow-lg backdrop-blur-md transition hover:bg-slate-800"
+                    >
+                        {isPreviewEnabled ? (
+                            <Eye className="h-3 w-3" />
+                        ) : (
+                            <EyeOff className="h-3 w-3" />
+                        )}
+                        Preview {isPreviewEnabled ? 'ON' : 'OFF'}
+                    </button>
+                    <button
+                        type="button"
                         onClick={releaseCamera}
                         disabled={isRecording}
                         className="flex items-center gap-1.5 rounded-full border border-white/10 bg-slate-950/70 px-3 py-1.5 text-[10px] font-semibold text-slate-200 shadow-lg backdrop-blur-md transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
@@ -335,13 +367,22 @@ const VideoFeed = ({
                         autoPlay
                         muted
                         playsInline
-                        className="absolute inset-0 h-full w-full object-cover"
+                        className={`absolute inset-0 h-full w-full object-cover ${isPreviewEnabled ? 'visible' : 'invisible'}`}
                     />
                     <img
                         ref={processedImageRef}
                         alt="即時舞蹈姿態分析畫面"
-                        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-200 ${hasProcessedFrame ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+                        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-200 ${isPreviewEnabled && hasProcessedFrame ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
                     />
+                    {!isPreviewEnabled && cameraReady && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-slate-950">
+                            <div className="text-center">
+                                <EyeOff className="mx-auto mb-3 h-8 w-8 text-slate-500" />
+                                <p className="text-sm font-semibold tracking-wide text-slate-300">PREVIEW OFF</p>
+                                <p className="mt-1 text-xs text-slate-500">Camera capture and pose analysis continue.</p>
+                            </div>
+                        </div>
+                    )}
                     <canvas ref={captureCanvasRef} className="hidden" aria-hidden="true" />
                 </>
             )}
